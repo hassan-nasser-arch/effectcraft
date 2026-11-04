@@ -1,0 +1,78 @@
+name: EffectCraft Pages
+
+on:
+  push:
+    branches: [release, gh-pages]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to build (default: release)"
+        type: string
+        default: "release"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: "true"
+
+jobs:
+  build:
+    name: Build website
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'release' }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pages-web
+      - name: Install wasm-bindgen-cli and wasm-opt
+        shell: bash
+        run: |
+          WASM_BINDGEN_VERSION="$(sed -n 's/^const WASM_BINDGEN: &str = "\(.*\)";$/\1/p' xtask/src/main.rs)"
+          echo "WASM_BINDGEN_VERSION=$WASM_BINDGEN_VERSION" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ env.WASM_BINDGEN_VERSION }},wasm-opt
+      - name: Build EffectCraft Web
+        shell: bash
+        run: |
+          packaging/web/package.sh
+          site_dir="$(find target/web-package -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -n "$site_dir"
+          test -f "$site_dir/index.html"
+          touch "$site_dir/.nojekyll"
+          rm -rf dist/pages
+          mv "$site_dir" dist/pages
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/pages
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy EffectCraft
+        id: deployment
+        uses: actions/deploy-pages@v4
